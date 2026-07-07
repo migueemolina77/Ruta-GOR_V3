@@ -651,14 +651,22 @@ def construir_matriz_costos(
     return matriz_costo, detalle
 
 
-def resolver_tsp_abierto(matriz_costo, tiempo_limite_seg=5):
+def resolver_tsp_abierto(matriz_costo, indice_inicio_fijo=None, tiempo_limite_seg=5):
     """
-    Resuelve el TSP de camino abierto (inicio y fin libres) usando OR-Tools.
+    Resuelve el TSP de camino abierto (fin siempre libre) usando OR-Tools.
 
-    Tecnica: se agrega un nodo ficticio (dummy) conectado con costo 0
-    hacia y desde todos los nodos reales. Esto permite que el recorrido
-    "entre" y "salga" del circuito por donde sea mas barato, sin obligar
-    a regresar al punto de partida ni fijar un inicio predeterminado.
+    Tecnica: se agrega un nodo ficticio (dummy) que actua como deposito.
+
+    - Si indice_inicio_fijo es None: el dummy se conecta con costo 0
+      hacia TODOS los nodos reales -> el optimizador elige libremente
+      por donde empezar.
+    - Si indice_inicio_fijo tiene un valor: el dummy solo se conecta
+      con costo 0 hacia ESE nodo, y con un costo altisimo hacia el
+      resto -> el recorrido queda obligado a iniciar ahi.
+
+    En ambos casos, todos los nodos reales se conectan con costo 0
+    de vuelta al dummy, por lo que el final del recorrido siempre
+    es libre (no hay regreso obligado al punto de partida).
 
     Retorna una lista con el orden optimo de indices (0-based) sobre
     los puntos originales, o None si no encuentra solucion.
@@ -671,6 +679,7 @@ def resolver_tsp_abierto(matriz_costo, tiempo_limite_seg=5):
 
     n_total = n + 1
     dummy = n
+    COSTO_PROHIBITIVO = 10 ** 12
 
     matriz_amp = [[0] * n_total for _ in range(n_total)]
 
@@ -678,10 +687,18 @@ def resolver_tsp_abierto(matriz_costo, tiempo_limite_seg=5):
         for j in range(n):
             matriz_amp[i][j] = matriz_costo[i][j]
 
-    # Costos hacia/desde el nodo ficticio = 0 -> inicio y fin libres
+    # Salida del recorrido (nodo real -> dummy) siempre libre, costo 0
     for i in range(n):
-        matriz_amp[dummy][i] = 0
         matriz_amp[i][dummy] = 0
+
+    # Entrada al recorrido (dummy -> nodo real): libre o fija segun el caso
+    for i in range(n):
+        if indice_inicio_fijo is None:
+            matriz_amp[dummy][i] = 0
+        elif i == indice_inicio_fijo:
+            matriz_amp[dummy][i] = 0
+        else:
+            matriz_amp[dummy][i] = COSTO_PROHIBITIVO
 
     manager = pywrapcp.RoutingIndexManager(n_total, 1, dummy)
     routing = pywrapcp.RoutingModel(manager)
@@ -1389,6 +1406,19 @@ with tab_analisis:
             )
         )
 
+        modo_inicio = st.radio(
+            "Punto de partida de la ruta optimizada",
+            options=["Libre (el optimizador elige el mejor inicio)", "Fijo (iniciar en el primer pozo de la lista)"],
+            horizontal=False,
+            help=(
+                "'Libre' deja que el optimizador escoja el mejor punto de "
+                "partida entre todos los pozos. 'Fijo' obliga a que la ruta "
+                "sugerida siempre inicie en el primer pozo que escribiste en "
+                "la lista de arriba — util cuando ya sabes desde donde va a "
+                "salir la cuadrilla en la próxima campaña."
+            )
+        )
+
         st.divider()
 
         boton_optimizar = st.button(
@@ -1412,8 +1442,13 @@ with tab_analisis:
                     costo_por_despine
                 )
 
+                inicio_fijo = 0 if modo_inicio.startswith("Fijo") else None
+
                 orden_actual = list(range(len(puntos_analisis)))
-                orden_optimo = resolver_tsp_abierto(matriz_costo)
+                orden_optimo = resolver_tsp_abierto(
+                    matriz_costo,
+                    indice_inicio_fijo=inicio_fijo
+                )
 
                 if orden_optimo is None:
                     st.error(
@@ -1471,6 +1506,10 @@ with tab_analisis:
                     with col_optimo:
                         with st.container(border=True):
                             st.markdown("### ✅ Orden Sugerido (optimizado)")
+                            st.caption(
+                                "🔒 Inicio fijo en primer pozo" if inicio_fijo is not None
+                                else "🔓 Inicio libre (elegido por el optimizador)"
+                            )
                             secuencia_optima = " ➜ ".join(
                                 puntos_analisis[i]["n"] for i in orden_optimo
                             )
