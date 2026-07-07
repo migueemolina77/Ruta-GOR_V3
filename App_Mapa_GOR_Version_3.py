@@ -16,7 +16,7 @@ from ortools.constraint_solver import pywrapcp
 # ======================================================
 
 st.set_page_config(
-    page_title="MAPA GOR - Logística Rubiales",
+    page_title="MAPA GOR - Rubiales + Caño Sur",
     layout="wide",
     page_icon="🦎"
 )
