@@ -7,6 +7,8 @@ import requests
 import math
 import os
 from folium.features import DivIcon
+from ortools.constraint_solver import routing_enums_pb2
+from ortools.constraint_solver import pywrapcp
 
 
 # ======================================================
@@ -567,6 +569,181 @@ def buscar_punto(db, nombre):
 
 
 # ======================================================
+# MODULO DE OPTIMIZACION DE RUTAS (V3)
+# ======================================================
+# Resuelve el problema de "camino mas corto" (TSP de ruta abierta,
+# con inicio y fin libres) entre los pozos seleccionados, usando
+# como costo una combinacion de: km recorridos, tiempo de
+# movilizacion y penalizacion por despines de torre detectados
+# en la geometria real de cada tramo.
+# ======================================================
+
+@st.cache_data(show_spinner=False)
+def construir_matriz_costos(
+    puntos,
+    costo_por_km,
+    costo_por_hora,
+    velocidad_kmh,
+    costo_por_despine
+):
+    """
+    Construye la matriz NxN de costos entre todos los pares de puntos
+    seleccionados. Para cada par consulta OSRM (geometria + km reales),
+    detecta cuantos puntos criticos tipo PUENTE cruza esa geometria
+    (despines) y calcula el costo combinado del tramo.
+
+    Retorna:
+        matriz_costo: lista NxN de enteros (costo * 100, requerido por OR-Tools)
+        detalle: dict {(i, j): {"km", "horas", "despines", "geom", "alertas"}}
+    """
+
+    n = len(puntos)
+    matriz_costo = [[0] * n for _ in range(n)]
+    detalle = {}
+
+    for i in range(n):
+        for j in range(n):
+
+            if i == j:
+                continue
+
+            geom, km = obtener_ruta_osrm(puntos[i], puntos[j])
+
+            horas = km / velocidad_kmh if velocidad_kmh > 0 else 0
+
+            alertas = evaluar_alertas_puntos_criticos(geom)
+            n_despines = sum(1 for a in alertas if a["tipo"] == "PUENTE")
+
+            costo = (
+                (km * costo_por_km)
+                + (horas * costo_por_hora)
+                + (n_despines * costo_por_despine)
+            )
+
+            matriz_costo[i][j] = int(round(costo * 100))
+
+            detalle[(i, j)] = {
+                "km": km,
+                "horas": horas,
+                "despines": n_despines,
+                "geom": geom,
+                "alertas": alertas
+            }
+
+    return matriz_costo, detalle
+
+
+def resolver_tsp_abierto(matriz_costo, tiempo_limite_seg=5):
+    """
+    Resuelve el TSP de camino abierto (inicio y fin libres) usando OR-Tools.
+
+    Tecnica: se agrega un nodo ficticio (dummy) conectado con costo 0
+    hacia y desde todos los nodos reales. Esto permite que el recorrido
+    "entre" y "salga" del circuito por donde sea mas barato, sin obligar
+    a regresar al punto de partida ni fijar un inicio predeterminado.
+
+    Retorna una lista con el orden optimo de indices (0-based) sobre
+    los puntos originales, o None si no encuentra solucion.
+    """
+
+    n = len(matriz_costo)
+
+    if n < 2:
+        return list(range(n))
+
+    n_total = n + 1
+    dummy = n
+
+    matriz_amp = [[0] * n_total for _ in range(n_total)]
+
+    for i in range(n):
+        for j in range(n):
+            matriz_amp[i][j] = matriz_costo[i][j]
+
+    # Costos hacia/desde el nodo ficticio = 0 -> inicio y fin libres
+    for i in range(n):
+        matriz_amp[dummy][i] = 0
+        matriz_amp[i][dummy] = 0
+
+    manager = pywrapcp.RoutingIndexManager(n_total, 1, dummy)
+    routing = pywrapcp.RoutingModel(manager)
+
+    def costo_callback(from_index, to_index):
+        from_nodo = manager.IndexToNode(from_index)
+        to_nodo = manager.IndexToNode(to_index)
+        return matriz_amp[from_nodo][to_nodo]
+
+    transit_callback_index = routing.RegisterTransitCallback(costo_callback)
+    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+    parametros = pywrapcp.DefaultRoutingSearchParameters()
+    parametros.first_solution_strategy = (
+        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    )
+    parametros.local_search_metaheuristic = (
+        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+    )
+    parametros.time_limit.FromSeconds(tiempo_limite_seg)
+
+    solucion = routing.SolveWithParameters(parametros)
+
+    if not solucion:
+        return None
+
+    orden = []
+    index = routing.Start(0)
+
+    while not routing.IsEnd(index):
+        nodo = manager.IndexToNode(index)
+        if nodo != dummy:
+            orden.append(nodo)
+        index = solucion.Value(routing.NextVar(index))
+
+    return orden
+
+
+def resumen_ruta(orden_indices, puntos, detalle):
+    """
+    Dado un orden de indices sobre 'puntos', calcula el resumen total:
+    km, horas, despines y costo, recorriendo la 'detalle' ya calculada
+    por construir_matriz_costos (no vuelve a llamar OSRM).
+    """
+
+    km_total = 0.0
+    horas_total = 0.0
+    despines_total = 0
+    tramos = []
+
+    for k in range(len(orden_indices) - 1):
+
+        i = orden_indices[k]
+        j = orden_indices[k + 1]
+
+        d = detalle[(i, j)]
+
+        km_total += d["km"]
+        horas_total += d["horas"]
+        despines_total += d["despines"]
+
+        tramos.append({
+            "origen": puntos[i],
+            "destino": puntos[j],
+            "km": d["km"],
+            "horas": d["horas"],
+            "despines": d["despines"],
+            "geom": d["geom"],
+            "alertas": d["alertas"]
+        })
+
+    return {
+        "km_total": km_total,
+        "horas_total": horas_total,
+        "despines_total": despines_total,
+        "tramos": tramos
+    }
+
+
+# ======================================================
 # INTERFAZ PRINCIPAL
 # ======================================================
 
@@ -575,7 +752,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.caption("Version V7.7 - Alertas automaticas por comunidades, puentes/canos y fincas")
+st.caption("Version V3 - Vista operativa + Analisis y optimizacion de rutas")
 
 st.divider()
 
@@ -599,303 +776,599 @@ if db.empty:
 
 
 # ======================================================
-# LAYOUT
+# PESTAÑAS PRINCIPALES
 # ======================================================
 
-col_ui, col_map = st.columns([1.1, 3])
+tab_operativa, tab_analisis = st.tabs([
+    "🗺️ Vista Operativa",
+    "📊 Análisis y Optimización de Rutas"
+])
 
 
 # ======================================================
-# PANEL IZQUIERDO
+# TAB 1 - VISTA OPERATIVA (logica original, sin cambios)
 # ======================================================
 
-with col_ui:
+with tab_operativa:
 
-    st.subheader("Plan de Ruta")
+    # --------------------------------------------------
+    # LAYOUT
+    # --------------------------------------------------
 
-    entrada = st.text_area(
-        "Lista de Pozos:",
-        placeholder="Ejemplo:\nRB-91\nRB-158\nCASE-023",
-        height=150
-    )
+    col_ui, col_map = st.columns([1.1, 3])
 
-    nombres = [
-        n.strip().upper()
-        for n in re.split(r"[\n,]+", entrada)
-        if n.strip()
-    ]
+    # --------------------------------------------------
+    # PANEL IZQUIERDO
+    # --------------------------------------------------
 
-    puntos_validos = []
-    nombres_no_encontrados = []
+    with col_ui:
 
-    for nombre in nombres:
+        st.subheader("Plan de Ruta")
 
-        fila = buscar_punto(db, nombre)
-
-        if fila is not None:
-            puntos_validos.append({
-                "id": len(puntos_validos) + 1,
-                "buscado": nombre,
-                "n": fila["NAME"],
-                "lat": float(fila["lat"]),
-                "lon": float(fila["lon"])
-            })
-        else:
-            nombres_no_encontrados.append(nombre)
-
-    if nombres_no_encontrados:
-        st.warning(
-            "No encontrados: "
-            + ", ".join(nombres_no_encontrados)
+        entrada = st.text_area(
+            "Lista de Pozos:",
+            placeholder="Ejemplo:\nRB-91\nRB-158\nCASE-023",
+            height=150
         )
 
-    rutas_calculadas = []
-    all_coords = []
-    colores = ["#00FFCC", "#FF007F", "#FFD700", "#00BFFF", "#7CFC00"]
+        nombres = [
+            n.strip().upper()
+            for n in re.split(r"[\n,]+", entrada)
+            if n.strip()
+        ]
 
-    if len(nombres) == 0:
-        st.info("Ingrese mínimo dos pozos o clusters para calcular la ruta.")
+        puntos_validos = []
+        nombres_no_encontrados = []
 
-    elif len(puntos_validos) < 2:
-        st.info("Ingrese mínimo dos pozos o clusters válidos para calcular la ruta.")
+        for nombre in nombres:
 
-    else:
-        st.divider()
+            fila = buscar_punto(db, nombre)
 
-        km_totales = 0
+            if fila is not None:
+                puntos_validos.append({
+                    "id": len(puntos_validos) + 1,
+                    "buscado": nombre,
+                    "n": fila["NAME"],
+                    "lat": float(fila["lat"]),
+                    "lon": float(fila["lon"])
+                })
+            else:
+                nombres_no_encontrados.append(nombre)
 
-        for i in range(len(puntos_validos) - 1):
+        if nombres_no_encontrados:
+            st.warning(
+                "No encontrados: "
+                + ", ".join(nombres_no_encontrados)
+            )
 
-            p_orig = puntos_validos[i]
-            p_dest = puntos_validos[i + 1]
+        rutas_calculadas = []
+        all_coords = []
+        colores = ["#00FFCC", "#FF007F", "#FFD700", "#00BFFF", "#7CFC00"]
 
-            geom, km = obtener_ruta_osrm(p_orig, p_dest)
+        if len(nombres) == 0:
+            st.info("Ingrese mínimo dos pozos o clusters para calcular la ruta.")
 
-            c = colores[i % len(colores)]
+        elif len(puntos_validos) < 2:
+            st.info("Ingrese mínimo dos pozos o clusters válidos para calcular la ruta.")
 
-            rutas_calculadas.append({
-                "tramo": i + 1,
-                "origen": p_orig,
-                "destino": p_dest,
-                "geom": geom,
-                "km": km,
-                "color": c
-            })
+        else:
+            st.divider()
 
-            km_totales += km
-            all_coords.extend(geom)
+            km_totales = 0
 
-            # --------------------------------------------------
-            # ALERTAS AUTOMATICAS POR PUNTOS CRITICOS
-            # --------------------------------------------------
+            for i in range(len(puntos_validos) - 1):
 
-            alertas = []
+                p_orig = puntos_validos[i]
+                p_dest = puntos_validos[i + 1]
 
-            alertas_puntos = evaluar_alertas_puntos_criticos(geom)
-            alertas.extend(alertas_puntos)
+                geom, km = obtener_ruta_osrm(p_orig, p_dest)
 
-            # --------------------------------------------------
-            # ALERTA POR DISTANCIA MAYOR A 30 KM
-            # --------------------------------------------------
+                c = colores[i % len(colores)]
 
-            if km > 30:
-                alertas.append({
-                    "tipo": "DISTANCIA",
-                    "nombre": "DISTANCIA MAYOR A 30 KM",
-                    "mensaje": "🚚 DESPINAR TORRE POR DISTANCIA MAYOR A 30 KM",
-                    "distancia_km": km,
-                    "radio_km": None
+                rutas_calculadas.append({
+                    "tramo": i + 1,
+                    "origen": p_orig,
+                    "destino": p_dest,
+                    "geom": geom,
+                    "km": km,
+                    "color": c
                 })
 
-            # --------------------------------------------------
-            # TARJETA NATIVA STREAMLIT
-            # --------------------------------------------------
+                km_totales += km
+                all_coords.extend(geom)
 
-            with st.container(border=True):
+                # --------------------------------------------------
+                # ALERTAS AUTOMATICAS POR PUNTOS CRITICOS
+                # --------------------------------------------------
 
-                st.caption(f"TRAMO {i + 1} ➜ {i + 2}")
+                alertas = []
 
-                st.markdown(
-                    f"**{p_orig['n']} ➜ {p_dest['n']}**"
-                )
+                alertas_puntos = evaluar_alertas_puntos_criticos(geom)
+                alertas.extend(alertas_puntos)
 
-                distancia_html = (
-                    f"<h3 style='color:{c}; margin-top:0px; margin-bottom:8px;'>"
-                    f"{km:.2f} KM"
-                    f"</h3>"
-                )
+                # --------------------------------------------------
+                # ALERTA POR DISTANCIA MAYOR A 30 KM
+                # --------------------------------------------------
 
-                st.markdown(distancia_html, unsafe_allow_html=True)
+                if km > 30:
+                    alertas.append({
+                        "tipo": "DISTANCIA",
+                        "nombre": "DISTANCIA MAYOR A 30 KM",
+                        "mensaje": "🚚 DESPINAR TORRE POR DISTANCIA MAYOR A 30 KM",
+                        "distancia_km": km,
+                        "radio_km": None
+                    })
 
-                if len(alertas) == 0:
-                    st.success("✅ Sin alertas críticas detectadas en este tramo.")
+                # --------------------------------------------------
+                # TARJETA NATIVA STREAMLIT
+                # --------------------------------------------------
 
-                for alerta in alertas:
+                with st.container(border=True):
 
-                    if alerta["tipo"] in ["PUENTE", "DISTANCIA"]:
-                        st.error(alerta["mensaje"])
+                    st.caption(f"TRAMO {i + 1} ➜ {i + 2}")
 
-                    elif alerta["tipo"] == "COMUNIDAD":
-                        st.warning(alerta["mensaje"])
+                    st.markdown(
+                        f"**{p_orig['n']} ➜ {p_dest['n']}**"
+                    )
 
-                    elif alerta["tipo"] == "FINCA":
-                        st.info(alerta["mensaje"])
+                    distancia_html = (
+                        f"<h3 style='color:{c}; margin-top:0px; margin-bottom:8px;'>"
+                        f"{km:.2f} KM"
+                        f"</h3>"
+                    )
 
-                    else:
-                        st.info(alerta["mensaje"])
+                    st.markdown(distancia_html, unsafe_allow_html=True)
 
-        st.metric("DISTANCIA TOTAL", f"{km_totales:.2f} KM")
+                    if len(alertas) == 0:
+                        st.success("✅ Sin alertas críticas detectadas en este tramo.")
+
+                    for alerta in alertas:
+
+                        if alerta["tipo"] in ["PUENTE", "DISTANCIA"]:
+                            st.error(alerta["mensaje"])
+
+                        elif alerta["tipo"] == "COMUNIDAD":
+                            st.warning(alerta["mensaje"])
+
+                        elif alerta["tipo"] == "FINCA":
+                            st.info(alerta["mensaje"])
+
+                        else:
+                            st.info(alerta["mensaje"])
+
+            st.metric("DISTANCIA TOTAL", f"{km_totales:.2f} KM")
 
 
-# ======================================================
-# MAPA DERECHO
-# ======================================================
+    # ======================================================
+    # MAPA DERECHO
+    # ======================================================
 
-with col_map:
+    with col_map:
 
-    if len(puntos_validos) >= 2 and len(rutas_calculadas) > 0:
+        if len(puntos_validos) >= 2 and len(rutas_calculadas) > 0:
 
-        m = folium.Map(
-            tiles=None,
-            zoom_control=True
-        )
+            m = folium.Map(
+                tiles=None,
+                zoom_control=True
+            )
 
-        folium.TileLayer(
-            tiles="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
-            attr="Google",
-            name="Satélite"
-        ).add_to(m)
-
-        # --------------------------------------------------
-        # RUTAS
-        # --------------------------------------------------
-
-        for ruta in rutas_calculadas:
-
-            folium.PolyLine(
-                ruta["geom"],
-                color=ruta["color"],
-                weight=5,
-                opacity=0.85,
-                tooltip=(
-                    f"Tramo {ruta['tramo']}: "
-                    f"{ruta['origen']['n']} ➜ {ruta['destino']['n']} "
-                    f"({ruta['km']:.2f} KM)"
-                )
+            folium.TileLayer(
+                tiles="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+                attr="Google",
+                name="Satélite"
             ).add_to(m)
 
-        # --------------------------------------------------
-        # MARCADORES DE POZOS / CLUSTERS
-        # --------------------------------------------------
+            # --------------------------------------------------
+            # RUTAS
+            # --------------------------------------------------
 
-        for p in puntos_validos:
+            for ruta in rutas_calculadas:
 
-            c = colores[(p["id"] - 1) % len(colores)]
+                folium.PolyLine(
+                    ruta["geom"],
+                    color=ruta["color"],
+                    weight=5,
+                    opacity=0.85,
+                    tooltip=(
+                        f"Tramo {ruta['tramo']}: "
+                        f"{ruta['origen']['n']} ➜ {ruta['destino']['n']} "
+                        f"({ruta['km']:.2f} KM)"
+                    )
+                ).add_to(m)
 
-            label_html = f"""
-            <div style="text-align:center;">
-                <div style="
-                    background:{c};
-                    color:black;
-                    border-radius:50%;
-                    width:24px;
-                    height:24px;
-                    line-height:24px;
-                    font-weight:bold;
-                    border:2px solid white;
-                    font-size:9pt;">
-                    {p["id"]}
+            # --------------------------------------------------
+            # MARCADORES DE POZOS / CLUSTERS
+            # --------------------------------------------------
+
+            for p in puntos_validos:
+
+                c = colores[(p["id"] - 1) % len(colores)]
+
+                label_html = f"""
+                <div style="text-align:center;">
+                    <div style="
+                        background:{c};
+                        color:black;
+                        border-radius:50%;
+                        width:24px;
+                        height:24px;
+                        line-height:24px;
+                        font-weight:bold;
+                        border:2px solid white;
+                        font-size:9pt;">
+                        {p["id"]}
+                    </div>
+
+                    <div style="
+                        background:rgba(14,17,23,0.90);
+                        color:white;
+                        padding:3px 8px;
+                        border-radius:5px;
+                        font-size:9pt;
+                        margin-top:4px;
+                        border:1px solid {c};
+                        white-space:nowrap;">
+                        {p["n"]}
+                    </div>
                 </div>
+                """
 
-                <div style="
-                    background:rgba(14,17,23,0.90);
-                    color:white;
-                    padding:3px 8px;
-                    border-radius:5px;
-                    font-size:9pt;
-                    margin-top:4px;
-                    border:1px solid {c};
-                    white-space:nowrap;">
-                    {p["n"]}
-                </div>
-            </div>
-            """
+                folium.Marker(
+                    [p["lat"], p["lon"]],
+                    icon=DivIcon(
+                        html=label_html,
+                        icon_anchor=(12, 12)
+                    ),
+                    tooltip=p["n"]
+                ).add_to(m)
 
-            folium.Marker(
-                [p["lat"], p["lon"]],
-                icon=DivIcon(
-                    html=label_html,
-                    icon_anchor=(12, 12)
-                ),
-                tooltip=p["n"]
-            ).add_to(m)
+            # --------------------------------------------------
+            # PUNTOS CRITICOS EN MAPA
+            # --------------------------------------------------
 
-        # --------------------------------------------------
-        # PUNTOS CRITICOS EN MAPA
-        # --------------------------------------------------
+            for nombre, punto in PUNTOS_CRITICOS_VALIDACION.items():
 
-        for nombre, punto in PUNTOS_CRITICOS_VALIDACION.items():
+                tipo = punto["tipo"]
+                radio_km = punto.get("radio_km", 1.0)
 
-            tipo = punto["tipo"]
-            radio_km = punto.get("radio_km", 1.0)
+                if tipo == "COMUNIDAD":
+                    color = "orange"
+                    icono = "users"
+                elif tipo == "PUENTE":
+                    color = "red"
+                    icono = "road"
+                elif tipo == "FINCA":
+                    color = "blue"
+                    icono = "home"
+                else:
+                    color = "gray"
+                    icono = "info-sign"
 
-            if tipo == "COMUNIDAD":
-                color = "orange"
-                icono = "users"
-            elif tipo == "PUENTE":
-                color = "red"
-                icono = "road"
-            elif tipo == "FINCA":
-                color = "blue"
-                icono = "home"
-            else:
-                color = "gray"
-                icono = "info-sign"
+                folium.Marker(
+                    [punto["lat"], punto["lon"]],
+                    icon=folium.Icon(
+                        color=color,
+                        icon=icono,
+                        prefix="fa"
+                    ),
+                    tooltip=f"{tipo}: {nombre} - {punto['alerta']}"
+                ).add_to(m)
 
-            folium.Marker(
-                [punto["lat"], punto["lon"]],
-                icon=folium.Icon(
+                folium.Circle(
+                    [punto["lat"], punto["lon"]],
+                    radius=radio_km * 1000,
                     color=color,
-                    icon=icono,
-                    prefix="fa"
-                ),
-                tooltip=f"{tipo}: {nombre} - {punto['alerta']}"
-            ).add_to(m)
+                    weight=2,
+                    fill=True,
+                    fill_opacity=0.10,
+                    opacity=0.50,
+                    tooltip=f"{nombre} | Radio {radio_km} km | {punto['alerta']}"
+                ).add_to(m)
 
-            folium.Circle(
-                [punto["lat"], punto["lon"]],
-                radius=radio_km * 1000,
-                color=color,
-                weight=2,
-                fill=True,
-                fill_opacity=0.10,
-                opacity=0.50,
-                tooltip=f"{nombre} | Radio {radio_km} km | {punto['alerta']}"
-            ).add_to(m)
+            # --------------------------------------------------
+            # AJUSTE DE ZOOM
+            # --------------------------------------------------
 
-        # --------------------------------------------------
-        # AJUSTE DE ZOOM
-        # --------------------------------------------------
+            if all_coords:
 
-        if all_coords:
+                sw = [
+                    min(p[0] for p in all_coords),
+                    min(p[1] for p in all_coords)
+                ]
 
-            sw = [
-                min(p[0] for p in all_coords),
-                min(p[1] for p in all_coords)
-            ]
+                ne = [
+                    max(p[0] for p in all_coords),
+                    max(p[1] for p in all_coords)
+                ]
 
-            ne = [
-                max(p[0] for p in all_coords),
-                max(p[1] for p in all_coords)
-            ]
+                m.fit_bounds([sw, ne])
 
-            m.fit_bounds([sw, ne])
+            st_folium(
+                m,
+                width="100%",
+                height=700
+            )
 
-        st_folium(
-            m,
-            width="100%",
-            height=700
+        else:
+            st.info("Ingrese una ruta válida para visualizar el mapa.")
+
+
+# ======================================================
+# TAB 2 - ANALISIS Y OPTIMIZACION DE RUTAS
+# ======================================================
+
+with tab_analisis:
+
+    st.subheader("Análisis y Optimización de Rutas")
+
+    st.caption(
+        "Compara el orden ingresado en la pestaña operativa contra el "
+        "orden sugerido por el optimizador (menor costo combinado de "
+        "km, tiempo y despines)."
+    )
+
+    if len(puntos_validos) < 2:
+
+        st.info(
+            "Ingrese al menos dos pozos válidos en la pestaña "
+            "'Vista Operativa' para habilitar el análisis."
         )
 
     else:
-        st.info("Ingrese una ruta válida para visualizar el mapa.")
+
+        st.divider()
+
+        # --------------------------------------------------
+        # PARAMETROS DE COSTO (editables por el usuario)
+        # --------------------------------------------------
+
+        st.markdown("**Parámetros de costo para la simulación**")
+
+        col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+
+        with col_p1:
+            costo_por_km = st.number_input(
+                "Costo por KM ($)",
+                min_value=0.0,
+                value=8000.0,
+                step=500.0,
+                help="Costo asociado a combustible y desgaste por km recorrido."
+            )
+
+        with col_p2:
+            costo_por_hora = st.number_input(
+                "Costo por hora ($)",
+                min_value=0.0,
+                value=150000.0,
+                step=10000.0,
+                help="Costo del vehiculo/cuadrilla por hora de movilizacion."
+            )
+
+        with col_p3:
+            velocidad_kmh = st.number_input(
+                "Velocidad promedio (km/h)",
+                min_value=1.0,
+                value=35.0,
+                step=1.0,
+                help="Velocidad promedio estimada en vias del campo."
+            )
+
+        with col_p4:
+            costo_por_despine = st.number_input(
+                "Costo por despine ($)",
+                min_value=0.0,
+                value=2000000.0,
+                step=100000.0,
+                help="Costo estimado (tiempo + dinero) por cada evento de despine de torre."
+            )
+
+        st.divider()
+
+        boton_optimizar = st.button(
+            "🚀 Calcular ruta optimizada",
+            type="primary",
+            use_container_width=False
+        )
+
+        if boton_optimizar:
+            st.session_state["analisis_calculado"] = True
+
+        if st.session_state.get("analisis_calculado", False):
+
+            with st.spinner("Consultando rutas reales y calculando matriz de costos..."):
+
+                matriz_costo, detalle = construir_matriz_costos(
+                    puntos_validos,
+                    costo_por_km,
+                    costo_por_hora,
+                    velocidad_kmh,
+                    costo_por_despine
+                )
+
+                orden_actual = list(range(len(puntos_validos)))
+                orden_optimo = resolver_tsp_abierto(matriz_costo)
+
+                if orden_optimo is None:
+                    st.error(
+                        "No fue posible calcular una ruta optimizada. "
+                        "Intente nuevamente o reduzca el numero de pozos."
+                    )
+
+                else:
+
+                    resumen_actual = resumen_ruta(
+                        orden_actual, puntos_validos, detalle
+                    )
+                    resumen_optimo = resumen_ruta(
+                        orden_optimo, puntos_validos, detalle
+                    )
+
+                    def costo_total(resumen):
+                        return (
+                            (resumen["km_total"] * costo_por_km)
+                            + (resumen["horas_total"] * costo_por_hora)
+                            + (resumen["despines_total"] * costo_por_despine)
+                        )
+
+                    costo_actual_val = costo_total(resumen_actual)
+                    costo_optimo_val = costo_total(resumen_optimo)
+
+                    ahorro_costo = costo_actual_val - costo_optimo_val
+                    ahorro_pct = (
+                        (ahorro_costo / costo_actual_val * 100)
+                        if costo_actual_val > 0 else 0
+                    )
+
+                    # ----------------------------------------------
+                    # COMPARATIVO ORDEN ACTUAL VS SUGERIDO
+                    # ----------------------------------------------
+
+                    col_actual, col_optimo = st.columns(2)
+
+                    with col_actual:
+
+                        with st.container(border=True):
+
+                            st.markdown("### 📋 Orden Actual (ingresado)")
+
+                            secuencia_actual = " ➜ ".join(
+                                puntos_validos[i]["n"] for i in orden_actual
+                            )
+                            st.caption(secuencia_actual)
+
+                            st.metric("Distancia total", f"{resumen_actual['km_total']:.2f} KM")
+                            st.metric("Tiempo estimado", f"{resumen_actual['horas_total']:.2f} horas")
+                            st.metric("Despines detectados", resumen_actual["despines_total"])
+                            st.metric("Costo estimado", f"$ {costo_actual_val:,.0f}")
+
+                    with col_optimo:
+
+                        with st.container(border=True):
+
+                            st.markdown("### ✅ Orden Sugerido (optimizado)")
+
+                            secuencia_optima = " ➜ ".join(
+                                puntos_validos[i]["n"] for i in orden_optimo
+                            )
+                            st.caption(secuencia_optima)
+
+                            st.metric(
+                                "Distancia total",
+                                f"{resumen_optimo['km_total']:.2f} KM",
+                                delta=f"{resumen_optimo['km_total'] - resumen_actual['km_total']:.2f} KM"
+                            )
+                            st.metric(
+                                "Tiempo estimado",
+                                f"{resumen_optimo['horas_total']:.2f} horas",
+                                delta=f"{resumen_optimo['horas_total'] - resumen_actual['horas_total']:.2f} horas"
+                            )
+                            st.metric(
+                                "Despines detectados",
+                                resumen_optimo["despines_total"],
+                                delta=int(resumen_optimo["despines_total"] - resumen_actual["despines_total"])
+                            )
+                            st.metric(
+                                "Costo estimado",
+                                f"$ {costo_optimo_val:,.0f}",
+                                delta=f"$ {costo_optimo_val - costo_actual_val:,.0f}"
+                            )
+
+                    st.divider()
+
+                    # ----------------------------------------------
+                    # CONSOLIDADO DE AHORRO
+                    # ----------------------------------------------
+
+                    st.markdown("### 💰 Consolidado de Optimización")
+
+                    col_r1, col_r2, col_r3 = st.columns(3)
+
+                    col_r1.metric(
+                        "Ahorro en KM",
+                        f"{resumen_actual['km_total'] - resumen_optimo['km_total']:.2f} KM"
+                    )
+                    col_r2.metric(
+                        "Ahorro en tiempo",
+                        f"{resumen_actual['horas_total'] - resumen_optimo['horas_total']:.2f} horas"
+                    )
+                    col_r3.metric(
+                        "Ahorro estimado en costo",
+                        f"$ {ahorro_costo:,.0f}",
+                        delta=f"{ahorro_pct:.1f}%"
+                    )
+
+                    if ahorro_costo <= 0:
+                        st.info(
+                            "El orden actual ya es igual o mejor que la mejor "
+                            "alternativa encontrada para los parametros dados."
+                        )
+
+                    st.divider()
+
+                    # ----------------------------------------------
+                    # MAPA COMPARATIVO
+                    # ----------------------------------------------
+
+                    st.markdown("### 🗺️ Mapa: Ruta Actual vs Ruta Sugerida")
+
+                    m2 = folium.Map(tiles=None, zoom_control=True)
+
+                    folium.TileLayer(
+                        tiles="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+                        attr="Google",
+                        name="Satélite"
+                    ).add_to(m2)
+
+                    all_coords_2 = []
+
+                    for tramo in resumen_actual["tramos"]:
+                        folium.PolyLine(
+                            tramo["geom"],
+                            color="#8b949e",
+                            weight=4,
+                            opacity=0.55,
+                            dash_array="6,6",
+                            tooltip=(
+                                f"[ACTUAL] {tramo['origen']['n']} ➜ "
+                                f"{tramo['destino']['n']} ({tramo['km']:.2f} KM)"
+                            )
+                        ).add_to(m2)
+                        all_coords_2.extend(tramo["geom"])
+
+                    for tramo in resumen_optimo["tramos"]:
+                        folium.PolyLine(
+                            tramo["geom"],
+                            color="#00FFCC",
+                            weight=5,
+                            opacity=0.9,
+                            tooltip=(
+                                f"[SUGERIDO] {tramo['origen']['n']} ➜ "
+                                f"{tramo['destino']['n']} ({tramo['km']:.2f} KM)"
+                            )
+                        ).add_to(m2)
+                        all_coords_2.extend(tramo["geom"])
+
+                    for p in puntos_validos:
+                        folium.Marker(
+                            [p["lat"], p["lon"]],
+                            icon=folium.Icon(color="cadetblue", icon="tint", prefix="fa"),
+                            tooltip=p["n"]
+                        ).add_to(m2)
+
+                    if all_coords_2:
+                        sw2 = [
+                            min(p[0] for p in all_coords_2),
+                            min(p[1] for p in all_coords_2)
+                        ]
+                        ne2 = [
+                            max(p[0] for p in all_coords_2),
+                            max(p[1] for p in all_coords_2)
+                        ]
+                        m2.fit_bounds([sw2, ne2])
+
+                    st.caption(
+                        "🔘 Línea gris punteada = orden actual · "
+                        "🟢 Línea verde solida = orden sugerido"
+                    )
+
+                    st_folium(m2, width="100%", height=600)
