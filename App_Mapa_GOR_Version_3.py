@@ -993,6 +993,14 @@ with tab_operativa:
                 name="Satélite"
             ).add_to(m)
 
+            folium.TileLayer(
+                tiles="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}",
+                attr="Google",
+                name="Calles / GPS"
+            ).add_to(m)
+
+            folium.LayerControl(position="topright", collapsed=True).add_to(m)
+
             # --------------------------------------------------
             # RUTAS
             # --------------------------------------------------
@@ -1148,6 +1156,14 @@ def construir_mapa_numerado(orden_indices, puntos, tramos, color_ruta):
         attr="Google",
         name="Satélite"
     ).add_to(mapa)
+
+    folium.TileLayer(
+        tiles="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}",
+        attr="Google",
+        name="Calles / GPS"
+    ).add_to(mapa)
+
+    folium.LayerControl(position="topright", collapsed=True).add_to(mapa)
 
     all_coords_local = []
     despines_marcados = set()
