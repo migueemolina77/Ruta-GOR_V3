@@ -612,7 +612,25 @@ def construir_matriz_costos(
             horas = km / velocidad_kmh if velocidad_kmh > 0 else 0
 
             alertas = evaluar_alertas_puntos_criticos(geom)
-            n_despines = sum(1 for a in alertas if a["tipo"] == "PUENTE")
+
+            # ------------------------------------------------------
+            # PREMISA 2: DESPINE POR DISTANCIA MAYOR A 30 KM
+            # (misma regla que la pestaña Vista Operativa)
+            # ------------------------------------------------------
+
+            if km > 30:
+                alertas.append({
+                    "tipo": "DISTANCIA",
+                    "nombre": "DISTANCIA MAYOR A 30 KM",
+                    "mensaje": "🚚 DESPINAR TORRE POR DISTANCIA MAYOR A 30 KM",
+                    "distancia_km": km,
+                    "radio_km": None
+                })
+
+            # PREMISA 1 (puentes) + PREMISA 2 (distancia > 30 km) cuentan como despine
+            n_despines = sum(
+                1 for a in alertas if a["tipo"] in ("PUENTE", "DISTANCIA")
+            )
 
             costo = (
                 (km * costo_por_km)
@@ -1115,6 +1133,8 @@ def construir_mapa_numerado(orden_indices, puntos, tramos, color_ruta):
     ).add_to(mapa)
 
     all_coords_local = []
+    despines_marcados = set()
+    despines_por_distancia = []
 
     for tramo in tramos:
         folium.PolyLine(
@@ -1128,6 +1148,73 @@ def construir_mapa_numerado(orden_indices, puntos, tramos, color_ruta):
             )
         ).add_to(mapa)
         all_coords_local.extend(tramo["geom"])
+
+        # ----------------------------------------------
+        # MARCAR PUENTES/DESPINES QUE CRUZA ESTE TRAMO
+        # ----------------------------------------------
+
+        for alerta in tramo.get("alertas", []):
+
+            if alerta["tipo"] == "DISTANCIA":
+                despines_por_distancia.append(
+                    f"{tramo['origen']['n']} ➜ {tramo['destino']['n']} "
+                    f"({tramo['km']:.1f} km)"
+                )
+                continue
+
+            if alerta["tipo"] != "PUENTE":
+                continue
+
+            nombre_puente = alerta["nombre"]
+
+            if nombre_puente in despines_marcados:
+                continue
+
+            despines_marcados.add(nombre_puente)
+
+            punto_critico = PUNTOS_CRITICOS_VALIDACION.get(nombre_puente)
+
+            if punto_critico is None:
+                continue
+
+            folium.Marker(
+                [punto_critico["lat"], punto_critico["lon"]],
+                icon=folium.Icon(color="red", icon="road", prefix="fa"),
+                tooltip=(
+                    f"🚧 DESPINE: {nombre_puente} "
+                    f"({alerta['distancia_km']:.2f} km de la ruta)"
+                )
+            ).add_to(mapa)
+
+            folium.Circle(
+                [punto_critico["lat"], punto_critico["lon"]],
+                radius=punto_critico.get("radio_km", 1.0) * 1000,
+                color="red",
+                weight=2,
+                fill=True,
+                fill_opacity=0.12,
+                opacity=0.6,
+                tooltip=f"{nombre_puente} | Radio {punto_critico.get('radio_km', 1.0)} km"
+            ).add_to(mapa)
+
+    if despines_marcados or despines_por_distancia:
+
+        partes = []
+
+        if despines_marcados:
+            partes.append(
+                f"🚧 Puentes cruzados: " + ", ".join(sorted(despines_marcados))
+            )
+
+        if despines_por_distancia:
+            partes.append(
+                f"🚚 Tramos > 30 km: " + " | ".join(despines_por_distancia)
+            )
+
+        st.caption(" — ".join(partes))
+
+    else:
+        st.caption("✅ Sin puentes ni tramos mayores a 30 km en esta ruta.")
 
     for pos, idx in enumerate(orden_indices):
 
@@ -1289,6 +1376,19 @@ with tab_analisis:
                 help="Costo estimado (tiempo + dinero) por cada evento de despine de torre."
             )
 
+        incluir_costo_tiempo = st.checkbox(
+            "Incluir costo por tiempo en el cálculo",
+            value=False,
+            help=(
+                "Actívalo solo si tu contrato de transporte cobra por hora. "
+                "Por defecto queda apagado porque el tiempo real depende de "
+                "factores muy variables (clima, derrumbes, estado de la vía) "
+                "y en la mayoría de contratos el costo se factura por KM. "
+                "El tiempo estimado siempre se muestra como referencia, "
+                "se incluya o no en el costo."
+            )
+        )
+
         st.divider()
 
         boton_optimizar = st.button(
@@ -1327,11 +1427,13 @@ with tab_analisis:
                     resumen_optimo = resumen_ruta(orden_optimo, puntos_analisis, detalle)
 
                     def costo_total(resumen):
-                        return (
+                        costo = (
                             (resumen["km_total"] * costo_por_km)
-                            + (resumen["horas_total"] * costo_por_hora)
                             + (resumen["despines_total"] * costo_por_despine)
                         )
+                        if incluir_costo_tiempo:
+                            costo += resumen["horas_total"] * costo_por_hora
+                        return costo
 
                     costo_actual_val = costo_total(resumen_actual)
                     costo_optimo_val = costo_total(resumen_optimo)
@@ -1340,6 +1442,11 @@ with tab_analisis:
                     ahorro_pct = (
                         (ahorro_costo / costo_actual_val * 100)
                         if costo_actual_val > 0 else 0
+                    )
+
+                    nota_tiempo = (
+                        "(incluido en el costo)" if incluir_costo_tiempo
+                        else "(solo referencial, no incluido en el costo)"
                     )
 
                     # ----------------------------------------------
@@ -1357,6 +1464,7 @@ with tab_analisis:
                             st.caption(secuencia_actual)
                             st.metric("Distancia total", f"{resumen_actual['km_total']:.2f} KM")
                             st.metric("Tiempo estimado", f"{resumen_actual['horas_total']:.2f} horas")
+                            st.caption(nota_tiempo)
                             st.metric("Despines detectados", resumen_actual["despines_total"])
                             st.metric("Costo estimado", f"$ {costo_actual_val:,.0f}")
 
@@ -1377,6 +1485,7 @@ with tab_analisis:
                                 f"{resumen_optimo['horas_total']:.2f} horas",
                                 delta=f"{resumen_optimo['horas_total'] - resumen_actual['horas_total']:.2f} horas"
                             )
+                            st.caption(nota_tiempo)
                             st.metric(
                                 "Despines detectados",
                                 resumen_optimo["despines_total"],
