@@ -1094,6 +1094,92 @@ with tab_operativa:
 
 
 # ======================================================
+# FUNCION AUXILIAR - MAPA NUMERADO (reutilizable en TAB 2)
+# ======================================================
+
+def construir_mapa_numerado(orden_indices, puntos, tramos, color_ruta):
+    """
+    Construye un mapa folium con:
+    - La polilinea de la ruta (en el orden dado)
+    - Marcadores numerados (1, 2, 3...) segun la posicion de cada
+      pozo DENTRO de ese orden especifico (igual estilo que la
+      pestaña Vista Operativa)
+    """
+
+    mapa = folium.Map(tiles=None, zoom_control=True)
+
+    folium.TileLayer(
+        tiles="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+        attr="Google",
+        name="Satélite"
+    ).add_to(mapa)
+
+    all_coords_local = []
+
+    for tramo in tramos:
+        folium.PolyLine(
+            tramo["geom"],
+            color=color_ruta,
+            weight=5,
+            opacity=0.85,
+            tooltip=(
+                f"{tramo['origen']['n']} ➜ {tramo['destino']['n']} "
+                f"({tramo['km']:.2f} KM)"
+            )
+        ).add_to(mapa)
+        all_coords_local.extend(tramo["geom"])
+
+    for pos, idx in enumerate(orden_indices):
+
+        p = puntos[idx]
+        numero = pos + 1
+
+        label_html = f"""
+        <div style="text-align:center;">
+            <div style="
+                background:{color_ruta};
+                color:black;
+                border-radius:50%;
+                width:24px;
+                height:24px;
+                line-height:24px;
+                font-weight:bold;
+                border:2px solid white;
+                font-size:9pt;">
+                {numero}
+            </div>
+            <div style="
+                background:rgba(14,17,23,0.90);
+                color:white;
+                padding:3px 8px;
+                border-radius:5px;
+                font-size:9pt;
+                margin-top:4px;
+                border:1px solid {color_ruta};
+                white-space:nowrap;">
+                {p["n"]}
+            </div>
+        </div>
+        """
+
+        folium.Marker(
+            [p["lat"], p["lon"]],
+            icon=DivIcon(html=label_html, icon_anchor=(12, 12)),
+            tooltip=f"{numero}. {p['n']}"
+        ).add_to(mapa)
+
+    if all_coords_local:
+        sw = [min(c[0] for c in all_coords_local), min(c[1] for c in all_coords_local)]
+        ne = [max(c[0] for c in all_coords_local), max(c[1] for c in all_coords_local)]
+        mapa.fit_bounds([sw, ne])
+    elif orden_indices:
+        p0 = puntos[orden_indices[0]]
+        mapa.fit_bounds([[p0["lat"], p0["lon"]], [p0["lat"], p0["lon"]]])
+
+    return mapa
+
+
+# ======================================================
 # TAB 2 - ANALISIS Y OPTIMIZACION DE RUTAS
 # ======================================================
 
@@ -1102,17 +1188,58 @@ with tab_analisis:
     st.subheader("Análisis y Optimización de Rutas")
 
     st.caption(
-        "Compara el orden ingresado en la pestaña operativa contra el "
-        "orden sugerido por el optimizador (menor costo combinado de "
-        "km, tiempo y despines)."
+        "Espacio independiente para analizar cualquier lista de pozos: "
+        "compara el orden ingresado contra el orden sugerido por el "
+        "optimizador (menor costo combinado de km, tiempo y despines)."
     )
 
-    if len(puntos_validos) < 2:
+    st.divider()
 
-        st.info(
-            "Ingrese al menos dos pozos válidos en la pestaña "
-            "'Vista Operativa' para habilitar el análisis."
-        )
+    # --------------------------------------------------
+    # ENTRADA INDEPENDIENTE DE POZOS (propia de esta pestaña)
+    # --------------------------------------------------
+
+    entrada_analisis = st.text_area(
+        "Lista de Pozos a analizar:",
+        placeholder="Ejemplo:\nRB-91\nRB-158\nCASE-023",
+        height=150,
+        key="entrada_analisis_tab2"
+    )
+
+    nombres_analisis = [
+        n.strip().upper()
+        for n in re.split(r"[\n,]+", entrada_analisis)
+        if n.strip()
+    ]
+
+    puntos_analisis = []
+    no_encontrados_analisis = []
+
+    for nombre in nombres_analisis:
+
+        fila = buscar_punto(db, nombre)
+
+        if fila is not None:
+            puntos_analisis.append({
+                "id": len(puntos_analisis) + 1,
+                "buscado": nombre,
+                "n": fila["NAME"],
+                "lat": float(fila["lat"]),
+                "lon": float(fila["lon"])
+            })
+        else:
+            no_encontrados_analisis.append(nombre)
+
+    if no_encontrados_analisis:
+        st.warning("No encontrados: " + ", ".join(no_encontrados_analisis))
+
+    if len(nombres_analisis) == 0:
+
+        st.info("Ingrese mínimo dos pozos para habilitar el análisis.")
+
+    elif len(puntos_analisis) < 2:
+
+        st.info("Ingrese mínimo dos pozos válidos para habilitar el análisis.")
 
     else:
 
@@ -1178,14 +1305,14 @@ with tab_analisis:
             with st.spinner("Consultando rutas reales y calculando matriz de costos..."):
 
                 matriz_costo, detalle = construir_matriz_costos(
-                    puntos_validos,
+                    puntos_analisis,
                     costo_por_km,
                     costo_por_hora,
                     velocidad_kmh,
                     costo_por_despine
                 )
 
-                orden_actual = list(range(len(puntos_validos)))
+                orden_actual = list(range(len(puntos_analisis)))
                 orden_optimo = resolver_tsp_abierto(matriz_costo)
 
                 if orden_optimo is None:
@@ -1196,12 +1323,8 @@ with tab_analisis:
 
                 else:
 
-                    resumen_actual = resumen_ruta(
-                        orden_actual, puntos_validos, detalle
-                    )
-                    resumen_optimo = resumen_ruta(
-                        orden_optimo, puntos_validos, detalle
-                    )
+                    resumen_actual = resumen_ruta(orden_actual, puntos_analisis, detalle)
+                    resumen_optimo = resumen_ruta(orden_optimo, puntos_analisis, detalle)
 
                     def costo_total(resumen):
                         return (
@@ -1226,32 +1349,24 @@ with tab_analisis:
                     col_actual, col_optimo = st.columns(2)
 
                     with col_actual:
-
                         with st.container(border=True):
-
                             st.markdown("### 📋 Orden Actual (ingresado)")
-
                             secuencia_actual = " ➜ ".join(
-                                puntos_validos[i]["n"] for i in orden_actual
+                                puntos_analisis[i]["n"] for i in orden_actual
                             )
                             st.caption(secuencia_actual)
-
                             st.metric("Distancia total", f"{resumen_actual['km_total']:.2f} KM")
                             st.metric("Tiempo estimado", f"{resumen_actual['horas_total']:.2f} horas")
                             st.metric("Despines detectados", resumen_actual["despines_total"])
                             st.metric("Costo estimado", f"$ {costo_actual_val:,.0f}")
 
                     with col_optimo:
-
                         with st.container(border=True):
-
                             st.markdown("### ✅ Orden Sugerido (optimizado)")
-
                             secuencia_optima = " ➜ ".join(
-                                puntos_validos[i]["n"] for i in orden_optimo
+                                puntos_analisis[i]["n"] for i in orden_optimo
                             )
                             st.caption(secuencia_optima)
-
                             st.metric(
                                 "Distancia total",
                                 f"{resumen_optimo['km_total']:.2f} KM",
@@ -1306,69 +1421,39 @@ with tab_analisis:
                     st.divider()
 
                     # ----------------------------------------------
-                    # MAPA COMPARATIVO
+                    # DOS MAPAS INDEPENDIENTES: ACTUAL vs SUGERIDO
                     # ----------------------------------------------
 
-                    st.markdown("### 🗺️ Mapa: Ruta Actual vs Ruta Sugerida")
+                    st.markdown("### 🗺️ Mapas: Orden Actual vs Orden Sugerido")
 
-                    m2 = folium.Map(tiles=None, zoom_control=True)
+                    col_mapa_actual, col_mapa_optimo = st.columns(2)
 
-                    folium.TileLayer(
-                        tiles="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
-                        attr="Google",
-                        name="Satélite"
-                    ).add_to(m2)
+                    with col_mapa_actual:
+                        st.caption("📋 Orden Actual — pines numerados según secuencia ingresada")
+                        mapa_actual = construir_mapa_numerado(
+                            orden_actual,
+                            puntos_analisis,
+                            resumen_actual["tramos"],
+                            "#8b949e"
+                        )
+                        st_folium(
+                            mapa_actual,
+                            width="100%",
+                            height=550,
+                            key="mapa_tab2_actual"
+                        )
 
-                    all_coords_2 = []
-
-                    for tramo in resumen_actual["tramos"]:
-                        folium.PolyLine(
-                            tramo["geom"],
-                            color="#8b949e",
-                            weight=4,
-                            opacity=0.55,
-                            dash_array="6,6",
-                            tooltip=(
-                                f"[ACTUAL] {tramo['origen']['n']} ➜ "
-                                f"{tramo['destino']['n']} ({tramo['km']:.2f} KM)"
-                            )
-                        ).add_to(m2)
-                        all_coords_2.extend(tramo["geom"])
-
-                    for tramo in resumen_optimo["tramos"]:
-                        folium.PolyLine(
-                            tramo["geom"],
-                            color="#00FFCC",
-                            weight=5,
-                            opacity=0.9,
-                            tooltip=(
-                                f"[SUGERIDO] {tramo['origen']['n']} ➜ "
-                                f"{tramo['destino']['n']} ({tramo['km']:.2f} KM)"
-                            )
-                        ).add_to(m2)
-                        all_coords_2.extend(tramo["geom"])
-
-                    for p in puntos_validos:
-                        folium.Marker(
-                            [p["lat"], p["lon"]],
-                            icon=folium.Icon(color="cadetblue", icon="tint", prefix="fa"),
-                            tooltip=p["n"]
-                        ).add_to(m2)
-
-                    if all_coords_2:
-                        sw2 = [
-                            min(p[0] for p in all_coords_2),
-                            min(p[1] for p in all_coords_2)
-                        ]
-                        ne2 = [
-                            max(p[0] for p in all_coords_2),
-                            max(p[1] for p in all_coords_2)
-                        ]
-                        m2.fit_bounds([sw2, ne2])
-
-                    st.caption(
-                        "🔘 Línea gris punteada = orden actual · "
-                        "🟢 Línea verde solida = orden sugerido"
-                    )
-
-                    st_folium(m2, width="100%", height=600)
+                    with col_mapa_optimo:
+                        st.caption("✅ Orden Sugerido — pines numerados según secuencia optimizada")
+                        mapa_optimo = construir_mapa_numerado(
+                            orden_optimo,
+                            puntos_analisis,
+                            resumen_optimo["tramos"],
+                            "#00FFCC"
+                        )
+                        st_folium(
+                            mapa_optimo,
+                            width="100%",
+                            height=550,
+                            key="mapa_tab2_optimo"
+                        )
