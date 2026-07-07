@@ -16,44 +16,266 @@ from ortools.constraint_solver import pywrapcp
 # ======================================================
 
 st.set_page_config(
-    page_title="LOGISTICA RUBIALES V7.7 - ALERTAS AUTOMATICAS",
+    page_title="MAPA GOR - Logística Rubiales",
     layout="wide",
     page_icon="🦎"
 )
 
 
 # ======================================================
-# ESTILO GENERAL
+# ESTILO GENERAL - PALETA Y TIPOGRAFIA
 # ======================================================
 
 st.markdown("""
-<style>
-    .stApp {
-        background-color: #0e1117;
-    }
-
-    h1 {
-        color: #ffffff;
-        font-family: 'Segoe UI', sans-serif;
-        font-weight: 800;
-        letter-spacing: -1px;
-    }
-
-    .stTextArea label {
-        color: white !important;
-        font-weight: bold;
-    }
-
-    .stMetric label {
-        color: #8b949e !important;
-    }
-
-    .stMetric div {
-        color: white !important;
-    }
-</style>
-
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+
+    :root {
+        --gor-bg: #0B0E14;
+        --gor-panel: #141922;
+        --gor-panel-2: #1B212C;
+        --gor-border: #262D3A;
+        --gor-accent: #00D9A3;
+        --gor-accent-soft: rgba(0, 217, 163, 0.12);
+        --gor-text: #E6EDF3;
+        --gor-text-muted: #8B949E;
+        --gor-danger: #F0997B;
+        --gor-danger-soft: rgba(216, 90, 48, 0.14);
+        --gor-warning: #EF9F27;
+        --gor-warning-soft: rgba(239, 159, 39, 0.14);
+        --gor-info: #85B7EB;
+        --gor-info-soft: rgba(24, 95, 165, 0.16);
+        --gor-success: #97C459;
+        --gor-success-soft: rgba(99, 153, 34, 0.14);
+    }
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', 'Segoe UI', sans-serif;
+    }
+
+    .stApp {
+        background-color: var(--gor-bg);
+    }
+
+    /* --------------------------------------------------
+       ENCABEZADO
+       -------------------------------------------------- */
+
+    .gor-header {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 4px 0 18px 0;
+        border-bottom: 1px solid var(--gor-border);
+        margin-bottom: 18px;
+    }
+
+    .gor-header-icon {
+        width: 44px;
+        height: 44px;
+        border-radius: 10px;
+        background: var(--gor-accent-soft);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        flex-shrink: 0;
+    }
+
+    .gor-header-title {
+        font-size: 20px;
+        font-weight: 700;
+        color: var(--gor-text);
+        margin: 0;
+        letter-spacing: -0.3px;
+    }
+
+    .gor-header-subtitle {
+        font-size: 13px;
+        color: var(--gor-text-muted);
+        margin: 2px 0 0 0;
+    }
+
+    /* --------------------------------------------------
+       TABS
+       -------------------------------------------------- */
+
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 4px;
+        border-bottom: 1px solid var(--gor-border);
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        height: 42px;
+        color: var(--gor-text-muted);
+        font-weight: 600;
+        font-size: 14px;
+        border-radius: 8px 8px 0 0;
+    }
+
+    .stTabs [aria-selected="true"] {
+        color: var(--gor-accent) !important;
+        border-bottom: 2px solid var(--gor-accent) !important;
+    }
+
+    /* --------------------------------------------------
+       INPUTS
+       -------------------------------------------------- */
+
+    .stTextArea label, .stNumberInput label, .stRadio label, .stCheckbox label {
+        color: var(--gor-text) !important;
+        font-weight: 600 !important;
+        font-size: 13px !important;
+    }
+
+    .stTextArea textarea, .stNumberInput input {
+        background-color: var(--gor-panel) !important;
+        border: 1px solid var(--gor-border) !important;
+        border-radius: 8px !important;
+        color: var(--gor-text) !important;
+    }
+
+    div[data-testid="stTextArea"] textarea:focus,
+    div[data-testid="stNumberInput"] input:focus {
+        border-color: var(--gor-accent) !important;
+    }
+
+    .stButton button {
+        background-color: var(--gor-accent) !important;
+        color: #04342C !important;
+        font-weight: 700 !important;
+        border-radius: 8px !important;
+        border: none !important;
+    }
+
+    .stButton button:hover {
+        opacity: 0.88;
+    }
+
+    /* --------------------------------------------------
+       CONTENEDORES CON BORDE (tarjetas nativas de Streamlit)
+       -------------------------------------------------- */
+
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        background-color: var(--gor-panel) !important;
+        border: 1px solid var(--gor-border) !important;
+        border-radius: 12px !important;
+    }
+
+    /* --------------------------------------------------
+       ALERTAS NATIVAS (success / error / warning / info)
+       -------------------------------------------------- */
+
+    div[data-testid="stAlert"] {
+        border-radius: 8px !important;
+        font-size: 13px !important;
+    }
+
+    /* --------------------------------------------------
+       DIVISORES Y TEXTO
+       -------------------------------------------------- */
+
+    hr {
+        border-color: var(--gor-border) !important;
+    }
+
+    .stCaption, [data-testid="stCaptionContainer"] {
+        color: var(--gor-text-muted) !important;
+    }
+
+    /* --------------------------------------------------
+       TARJETAS KPI PERSONALIZADAS (Tab de Analisis)
+       -------------------------------------------------- */
+
+    .gor-kpi-card {
+        background: var(--gor-panel-2);
+        border-radius: 10px;
+        padding: 12px 14px;
+        margin-bottom: 8px;
+    }
+
+    .gor-kpi-label {
+        font-size: 12px;
+        color: var(--gor-text-muted);
+        margin: 0 0 4px 0;
+        font-weight: 500;
+    }
+
+    .gor-kpi-value {
+        font-size: 22px;
+        font-weight: 700;
+        color: var(--gor-text);
+        margin: 0;
+    }
+
+    .gor-kpi-delta {
+        font-size: 12px;
+        font-weight: 600;
+        margin: 4px 0 0 0;
+    }
+
+    .gor-kpi-delta.up { color: var(--gor-danger); }
+    .gor-kpi-delta.down { color: var(--gor-success); }
+    .gor-kpi-delta.neutral { color: var(--gor-text-muted); }
+
+    .gor-badge {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 3px 10px;
+        border-radius: 6px;
+        margin-bottom: 8px;
+    }
+
+    .gor-badge.accent { background: var(--gor-accent-soft); color: var(--gor-accent); }
+    .gor-badge.neutral { background: rgba(139,148,158,0.15); color: var(--gor-text-muted); }
+
+</style>
+""", unsafe_allow_html=True)
+
+
+def tarjeta_kpi(label, valor, delta_texto=None, delta_tono="neutral"):
+    """
+    Renderiza una tarjeta KPI personalizada (reemplazo de st.metric)
+    con el lenguaje visual de la V3: etiqueta pequeña arriba, valor
+    grande abajo, y un delta opcional con color semantico.
+
+    delta_tono: "up" (aumento, en este contexto es negativo -> rojo),
+                "down" (disminucion, en este contexto es positivo -> verde),
+                "neutral" (sin color, gris)
+    """
+
+    delta_html = ""
+
+    if delta_texto is not None:
+        delta_html = f'<p class="gor-kpi-delta {delta_tono}">{delta_texto}</p>'
+
+    html = f"""
+    <div class="gor-kpi-card">
+        <p class="gor-kpi-label">{label}</p>
+        <p class="gor-kpi-value">{valor}</p>
+        {delta_html}
+    </div>
+    """
+
+    st.markdown(html, unsafe_allow_html=True)
+
+
+# ======================================================
+# ENCABEZADO PRINCIPAL
+# ======================================================
+
+st.markdown("""
+<div class="gor-header">
+    <div class="gor-header-icon">🦎</div>
+    <div>
+        <p class="gor-header-title">Mapa GOR — Logística Rubiales</p>
+        <p class="gor-header-subtitle">Vista operativa + análisis y optimización de rutas</p>
+    </div>
+</div>
 """, unsafe_allow_html=True)
 
 
@@ -782,15 +1004,6 @@ def resumen_ruta(orden_indices, puntos, detalle):
 # INTERFAZ PRINCIPAL
 # ======================================================
 
-st.markdown(
-    "<h1 style='text-align: center;'>🦎 MAPA GOR - ECOPETROL</h1>",
-    unsafe_allow_html=True
-)
-
-st.caption("Version V3 - Vista operativa + Analisis y optimizacion de rutas")
-
-st.divider()
-
 
 # ======================================================
 # CARGA INTERNA DEL ARCHIVO
@@ -971,7 +1184,7 @@ with tab_operativa:
                         else:
                             st.info(alerta["mensaje"])
 
-            st.metric("DISTANCIA TOTAL", f"{km_totales:.2f} KM")
+            tarjeta_kpi("DISTANCIA TOTAL", f"{km_totales:.2f} KM")
 
 
     # ======================================================
@@ -1513,43 +1726,58 @@ with tab_analisis:
                                 puntos_analisis[i]["n"] for i in orden_actual
                             )
                             st.caption(secuencia_actual)
-                            st.metric("Distancia total", f"{resumen_actual['km_total']:.2f} KM")
-                            st.metric("Tiempo estimado", f"{resumen_actual['horas_total']:.2f} horas")
-                            st.caption(nota_tiempo)
-                            st.metric("Despines detectados", resumen_actual["despines_total"])
-                            st.metric("Costo estimado", f"$ {costo_actual_val:,.0f}")
+                            tarjeta_kpi("Distancia total", f"{resumen_actual['km_total']:.2f} KM")
+                            tarjeta_kpi(
+                                f"Tiempo estimado {nota_tiempo}",
+                                f"{resumen_actual['horas_total']:.2f} horas"
+                            )
+                            tarjeta_kpi("Despines detectados", resumen_actual["despines_total"])
+                            tarjeta_kpi("Costo estimado", f"$ {costo_actual_val:,.0f}")
 
                     with col_optimo:
                         with st.container(border=True):
                             st.markdown("### ✅ Orden Sugerido (optimizado)")
-                            st.caption(
-                                "🔒 Inicio fijo en primer pozo" if inicio_fijo is not None
-                                else "🔓 Inicio libre (elegido por el optimizador)"
+                            st.markdown(
+                                '<span class="gor-badge accent">🔒 Inicio fijo</span>'
+                                if inicio_fijo is not None
+                                else '<span class="gor-badge neutral">🔓 Inicio libre</span>',
+                                unsafe_allow_html=True
                             )
                             secuencia_optima = " ➜ ".join(
                                 puntos_analisis[i]["n"] for i in orden_optimo
                             )
                             st.caption(secuencia_optima)
-                            st.metric(
+
+                            delta_km = resumen_optimo['km_total'] - resumen_actual['km_total']
+                            tarjeta_kpi(
                                 "Distancia total",
                                 f"{resumen_optimo['km_total']:.2f} KM",
-                                delta=f"{resumen_optimo['km_total'] - resumen_actual['km_total']:.2f} KM"
+                                f"{delta_km:+.2f} KM",
+                                "up" if delta_km > 0 else "down" if delta_km < 0 else "neutral"
                             )
-                            st.metric(
-                                "Tiempo estimado",
+
+                            delta_horas = resumen_optimo['horas_total'] - resumen_actual['horas_total']
+                            tarjeta_kpi(
+                                f"Tiempo estimado {nota_tiempo}",
                                 f"{resumen_optimo['horas_total']:.2f} horas",
-                                delta=f"{resumen_optimo['horas_total'] - resumen_actual['horas_total']:.2f} horas"
+                                f"{delta_horas:+.2f} horas",
+                                "up" if delta_horas > 0 else "down" if delta_horas < 0 else "neutral"
                             )
-                            st.caption(nota_tiempo)
-                            st.metric(
+
+                            delta_desp = resumen_optimo["despines_total"] - resumen_actual["despines_total"]
+                            tarjeta_kpi(
                                 "Despines detectados",
                                 resumen_optimo["despines_total"],
-                                delta=int(resumen_optimo["despines_total"] - resumen_actual["despines_total"])
+                                f"{delta_desp:+d}",
+                                "up" if delta_desp > 0 else "down" if delta_desp < 0 else "neutral"
                             )
-                            st.metric(
+
+                            delta_costo = costo_optimo_val - costo_actual_val
+                            tarjeta_kpi(
                                 "Costo estimado",
                                 f"$ {costo_optimo_val:,.0f}",
-                                delta=f"$ {costo_optimo_val - costo_actual_val:,.0f}"
+                                f"$ {delta_costo:,.0f}",
+                                "up" if delta_costo > 0 else "down" if delta_costo < 0 else "neutral"
                             )
 
                     st.divider()
@@ -1562,19 +1790,23 @@ with tab_analisis:
 
                     col_r1, col_r2, col_r3 = st.columns(3)
 
-                    col_r1.metric(
-                        "Ahorro en KM",
-                        f"{resumen_actual['km_total'] - resumen_optimo['km_total']:.2f} KM"
-                    )
-                    col_r2.metric(
-                        "Ahorro en tiempo",
-                        f"{resumen_actual['horas_total'] - resumen_optimo['horas_total']:.2f} horas"
-                    )
-                    col_r3.metric(
-                        "Ahorro estimado en costo",
-                        f"$ {ahorro_costo:,.0f}",
-                        delta=f"{ahorro_pct:.1f}%"
-                    )
+                    with col_r1:
+                        tarjeta_kpi(
+                            "Ahorro en KM",
+                            f"{resumen_actual['km_total'] - resumen_optimo['km_total']:.2f} KM"
+                        )
+                    with col_r2:
+                        tarjeta_kpi(
+                            "Ahorro en tiempo",
+                            f"{resumen_actual['horas_total'] - resumen_optimo['horas_total']:.2f} horas"
+                        )
+                    with col_r3:
+                        tarjeta_kpi(
+                            "Ahorro estimado en costo",
+                            f"$ {ahorro_costo:,.0f}",
+                            f"{ahorro_pct:.1f}%",
+                            "down" if ahorro_costo > 0 else "up" if ahorro_costo < 0 else "neutral"
+                        )
 
                     if ahorro_costo <= 0:
                         st.info(
