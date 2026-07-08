@@ -34,24 +34,24 @@ st.markdown("""
 <style>
 
     :root {
-        --gor-bg: #0B0E14;
-        --gor-panel: #141922;
-        --gor-panel-2: #1B212C;
-        --gor-border: #262D3A;
-        --gor-accent: #3FBF7F;
-        --gor-accent-soft: rgba(63, 191, 127, 0.14);
-        --gor-gold: #F2B90C;
-        --gor-gold-soft: rgba(242, 185, 12, 0.14);
-        --gor-text: #E6EDF3;
-        --gor-text-muted: #8B949E;
-        --gor-danger: #F0997B;
-        --gor-danger-soft: rgba(216, 90, 48, 0.14);
-        --gor-warning: #EF9F27;
-        --gor-warning-soft: rgba(239, 159, 39, 0.14);
-        --gor-info: #85B7EB;
-        --gor-info-soft: rgba(24, 95, 165, 0.16);
-        --gor-success: #97C459;
-        --gor-success-soft: rgba(99, 153, 34, 0.14);
+        --gor-bg: #FFFFFF;
+        --gor-panel: #F3F6F4;
+        --gor-panel-2: #EAF3EE;
+        --gor-border: #DCE3DF;
+        --gor-accent: #1F8A4C;
+        --gor-accent-soft: rgba(31, 138, 76, 0.10);
+        --gor-gold: #B8860B;
+        --gor-gold-soft: rgba(184, 134, 11, 0.12);
+        --gor-text: #1B1F24;
+        --gor-text-muted: #5B6570;
+        --gor-danger: #C0392B;
+        --gor-danger-soft: rgba(192, 57, 43, 0.10);
+        --gor-warning: #B7791F;
+        --gor-warning-soft: rgba(183, 121, 31, 0.12);
+        --gor-info: #1B5FA6;
+        --gor-info-soft: rgba(27, 95, 166, 0.10);
+        --gor-success: #2E7D32;
+        --gor-success-soft: rgba(46, 125, 50, 0.10);
     }
 
     html, body, [class*="css"] {
@@ -147,7 +147,7 @@ st.markdown("""
 
     .stButton button {
         background-color: var(--gor-accent) !important;
-        color: #04342C !important;
+        color: #FFFFFF !important;
         font-weight: 700 !important;
         border-radius: 8px !important;
         border: none !important;
