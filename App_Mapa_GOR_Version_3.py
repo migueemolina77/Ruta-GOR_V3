@@ -275,7 +275,7 @@ st.markdown("""
 <div class="gor-header">
     <div class="gor-header-icon">🦎</div>
     <div>
-        <p class="gor-header-title">Mapa GOR — Logística Rubiales</p>
+        <p class="gor-header-title">Mapa GOR</p>
         <p class="gor-header-subtitle">Vista operativa + análisis y optimización de rutas</p>
     </div>
 </div>
