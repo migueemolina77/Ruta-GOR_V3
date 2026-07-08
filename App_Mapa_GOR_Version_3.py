@@ -16,7 +16,7 @@ from ortools.constraint_solver import pywrapcp
 # ======================================================
 
 st.set_page_config(
-    page_title="MAPA GOR - Rubiales + Caño Sur",
+    page_title="MAPA GOR - Logística Rubiales",
     layout="wide",
     page_icon="🦎"
 )
@@ -38,8 +38,10 @@ st.markdown("""
         --gor-panel: #141922;
         --gor-panel-2: #1B212C;
         --gor-border: #262D3A;
-        --gor-accent: #00D9A3;
-        --gor-accent-soft: rgba(0, 217, 163, 0.12);
+        --gor-accent: #3FBF7F;
+        --gor-accent-soft: rgba(63, 191, 127, 0.14);
+        --gor-gold: #F2B90C;
+        --gor-gold-soft: rgba(242, 185, 12, 0.14);
         --gor-text: #E6EDF3;
         --gor-text-muted: #8B949E;
         --gor-danger: #F0997B;
@@ -231,6 +233,7 @@ st.markdown("""
     }
 
     .gor-badge.accent { background: var(--gor-accent-soft); color: var(--gor-accent); }
+    .gor-badge.gold { background: var(--gor-gold-soft); color: var(--gor-gold); }
     .gor-badge.neutral { background: rgba(139,148,158,0.15); color: var(--gor-text-muted); }
 
 </style>
@@ -1738,7 +1741,7 @@ with tab_analisis:
                         with st.container(border=True):
                             st.markdown("### ✅ Orden Sugerido (optimizado)")
                             st.markdown(
-                                '<span class="gor-badge accent">🔒 Inicio fijo</span>'
+                                '<span class="gor-badge gold">🔒 Inicio fijo</span>'
                                 if inicio_fijo is not None
                                 else '<span class="gor-badge neutral">🔓 Inicio libre</span>',
                                 unsafe_allow_html=True
